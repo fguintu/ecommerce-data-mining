@@ -6,8 +6,11 @@ RFM clustering following the article approach:
   - Min-Max normalize (per article)
   - Elbow method to select k, defaulting to k=3 (per article reasoning)
   - Labels: High Performance / Average Performance / Low Performance
+
+Run from anywhere: paths are resolved relative to this file.
 """
 
+from pathlib import Path
 import os
 import numpy as np
 import pandas as pd
@@ -19,13 +22,18 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, silhouette_samples
 
 # -- Config -------------------------------------------------------------------
-DATA_PATH  = "data/online_retail_cleaned.parquet"
-OUTPUT_DIR = "outputs/Clustering"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+ROOT       = Path(__file__).resolve().parent.parent
+DATA_PATH  = ROOT / "data" / "online_retail_cleaned.parquet"
+OUTPUT_DIR = ROOT / "outputs" / "Clustering"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 K_RANGE     = range(2, 10)
 K_FINAL     = 3          # article: k=2 oversimplifies; k=3 balances granularity
 RANDOM_SEED = 42
+
+def p(name):
+    """Return absolute path string for an output file."""
+    return str(OUTPUT_DIR / name)
 
 # -- 1. Load ------------------------------------------------------------------
 print("Loading data...")
@@ -50,8 +58,6 @@ print("\nRFM summary (raw):")
 print(rfm[["Recency", "Frequency", "Monetary"]].describe().round(2).to_string())
 
 # -- 3. Log-transform then Min-Max scale --------------------------------------
-# log1p first: compresses extreme outliers in Monetary / Frequency
-# Min-Max after: brings all features into [0, 1] (article method)
 rfm["R_log"] = np.log1p(rfm["Recency"])
 rfm["F_log"] = np.log1p(rfm["Frequency"])
 rfm["M_log"] = np.log1p(rfm["Monetary"])
@@ -72,9 +78,7 @@ for k in K_RANGE:
     silhouettes.append(silhouette_score(X, labels))
     print(f"  k={k}: inertia={km.inertia_:,.0f}  silhouette={silhouettes[-1]:.4f}")
 
-# Elbow + silhouette plot
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
 axes[0].plot(list(K_RANGE), inertias, marker="o")
 axes[0].axvline(x=K_FINAL, color="red", linestyle="--", label=f"Chosen k={K_FINAL}")
 axes[0].set_title("Elbow - Inertia vs k")
@@ -88,13 +92,13 @@ axes[1].set_xlabel("k"); axes[1].set_ylabel("Silhouette Score")
 axes[1].legend(); axes[1].grid(True, alpha=0.3)
 
 plt.tight_layout()
-fig.savefig(f"{OUTPUT_DIR}/01_elbow_silhouette.png", dpi=150)
+fig.savefig(p("01_elbow_silhouette.png"), dpi=150)
 plt.close(fig)
-print(f"  Saved -> {OUTPUT_DIR}/01_elbow_silhouette.png")
+print(f"  Saved -> outputs/Clustering/01_elbow_silhouette.png")
 
 # -- 5. Final model: k=3 ------------------------------------------------------
 print(f"\nFitting k={K_FINAL} (k=2 oversimplifies; k=3 separates low/avg/high)...")
-km_final     = KMeans(n_clusters=K_FINAL, n_init=20, random_state=RANDOM_SEED)
+km_final       = KMeans(n_clusters=K_FINAL, n_init=20, random_state=RANDOM_SEED)
 rfm["Cluster"] = km_final.fit_predict(X)
 
 # -- 6. Profile clusters by raw RFM means -------------------------------------
@@ -107,7 +111,6 @@ print("\nCluster profiles (raw RFM means):")
 print(profile.to_string())
 
 # -- 7. Label clusters: High / Average / Low Performance ----------------------
-# Rank by composite value score: low recency + high frequency + high monetary
 rfm_stats = rfm.groupby("Cluster").agg(
     R_mean=("Recency",    "mean"),
     F_mean=("Frequency",  "mean"),
@@ -119,7 +122,6 @@ for col in ["R_mean", "F_mean", "M_mean"]:
     mn, mx = rfm_stats[col].min(), rfm_stats[col].max()
     rfm_stats[col + "_n"] = (rfm_stats[col] - mn) / (mx - mn + 1e-9)
 
-# Recency inverted (lower days = more recent = better)
 rfm_stats["score"] = (
     (1 - rfm_stats["R_mean_n"]) * 0.30 +
     rfm_stats["F_mean_n"]       * 0.35 +
@@ -127,12 +129,16 @@ rfm_stats["score"] = (
 )
 rfm_stats = rfm_stats.sort_values("score", ascending=False).reset_index(drop=True)
 
-# Article labels: top = High Performance, middle = Average, bottom = Low
-LABELS = ["High Performance", "Average Performance", "Low Performance"]
+LABELS    = ["High Performance", "Average Performance", "Low Performance"]
 label_map = {int(row["Cluster"]): LABELS[i] for i, row in rfm_stats.iterrows()}
 rfm["Segment"] = rfm["Cluster"].map(label_map)
 
-# Segment summary
+seg_colors = {
+    "High Performance":    "#2ca02c",
+    "Average Performance": "#ff7f0e",
+    "Low Performance":     "#d62728",
+}
+
 seg_summary = (
     rfm.groupby("Segment")
     .agg(
@@ -142,7 +148,7 @@ seg_summary = (
         Monetary =("Monetary",   "mean"),
     )
     .round(1)
-    .loc[LABELS]   # force display order: high -> avg -> low
+    .loc[LABELS]
 )
 print("\nSegment summary:")
 print(seg_summary.to_string())
@@ -150,7 +156,7 @@ print(seg_summary.to_string())
 # -- 8. Silhouette plot -------------------------------------------------------
 sil_vals = silhouette_samples(X, rfm["Cluster"].values)
 rfm["Silhouette"] = sil_vals
-avg_sil = silhouette_score(X, rfm["Cluster"].values)
+avg_sil  = silhouette_score(X, rfm["Cluster"].values)
 
 fig, ax = plt.subplots(figsize=(8, 5))
 y_lower = 10
@@ -170,18 +176,14 @@ ax.set_title(f"Silhouette Plot - k={K_FINAL}")
 ax.set_xlabel("Silhouette coefficient"); ax.set_ylabel("Cluster")
 ax.legend(loc="upper right", fontsize=8)
 plt.tight_layout()
-fig.savefig(f"{OUTPUT_DIR}/01_silhouette_plot.png", dpi=150)
+fig.savefig(p("01_silhouette_plot.png"), dpi=150)
 plt.close(fig)
-print(f"Saved -> {OUTPUT_DIR}/01_silhouette_plot.png")
+print(f"Saved -> outputs/Clustering/01_silhouette_plot.png")
 
-# -- 9. Scatter: Recency vs log-Monetary coloured by segment ------------------
-seg_colors = {
-    "High Performance":    "#2ca02c",
-    "Average Performance": "#ff7f0e",
-    "Low Performance":     "#d62728",
-}
+# -- 9. Scatter: Recency vs log-Monetary --------------------------------------
 fig, ax = plt.subplots(figsize=(10, 6))
-for seg, grp in rfm.groupby("Segment"):
+for seg in LABELS:
+    grp = rfm[rfm["Segment"] == seg]
     ax.scatter(grp["Recency"], np.log1p(grp["Monetary"]),
                label=seg, alpha=0.5, s=15, color=seg_colors[seg])
 
@@ -190,27 +192,27 @@ ax.set_ylabel("log(1 + Monetary)")
 ax.set_title("Customer Segments - Recency vs log-Monetary")
 ax.legend(markerscale=2, fontsize=9)
 plt.tight_layout()
-fig.savefig(f"{OUTPUT_DIR}/01_scatter_recency_monetary.png", dpi=150)
+fig.savefig(p("01_scatter_recency_monetary.png"), dpi=150)
 plt.close(fig)
-print(f"Saved -> {OUTPUT_DIR}/01_scatter_recency_monetary.png")
+print(f"Saved -> outputs/Clustering/01_scatter_recency_monetary.png")
 
-# -- 10. RFM heatmap (z-scored, Recency inverted) ----------------------------
+# -- 10. RFM heatmap ----------------------------------------------------------
 heatmap_data = (
     rfm.groupby("Segment")[["Recency", "Frequency", "Monetary"]]
     .mean()
     .apply(lambda col: (col - col.mean()) / col.std())
     .loc[LABELS]
 )
-heatmap_data["Recency"] = -heatmap_data["Recency"]   # invert: green = recent
+heatmap_data["Recency"] = -heatmap_data["Recency"]
 
 fig, ax = plt.subplots(figsize=(7, 4))
 sns.heatmap(heatmap_data, annot=True, fmt=".2f", cmap="RdYlGn",
             linewidths=0.5, ax=ax, center=0)
 ax.set_title("RFM Heatmap by Segment (z-scored; Recency inverted)")
 plt.tight_layout()
-fig.savefig(f"{OUTPUT_DIR}/01_rfm_heatmap.png", dpi=150)
+fig.savefig(p("01_rfm_heatmap.png"), dpi=150)
 plt.close(fig)
-print(f"Saved -> {OUTPUT_DIR}/01_rfm_heatmap.png")
+print(f"Saved -> outputs/Clustering/01_rfm_heatmap.png")
 
 # -- 11. Segment size bar chart -----------------------------------------------
 fig, ax = plt.subplots(figsize=(7, 4))
@@ -222,18 +224,15 @@ ax.set_title("Customer Count per Segment")
 ax.set_xlabel(""); ax.set_ylabel("Customers")
 ax.tick_params(axis="x", rotation=15)
 plt.tight_layout()
-fig.savefig(f"{OUTPUT_DIR}/01_segment_sizes.png", dpi=150)
+fig.savefig(p("01_segment_sizes.png"), dpi=150)
 plt.close(fig)
-print(f"Saved -> {OUTPUT_DIR}/01_segment_sizes.png")
+print(f"Saved -> outputs/Clustering/01_segment_sizes.png")
 
-# -- 12. Mean RFM bar charts per segment (article style) ----------------------
+# -- 12. Mean RFM bar charts --------------------------------------------------
 fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-metrics = ["Recency", "Frequency", "Monetary"]
-bar_colors = [seg_colors[s] for s in LABELS]
-
-for ax, metric in zip(axes, metrics):
+for ax, metric in zip(axes, ["Recency", "Frequency", "Monetary"]):
     vals = seg_summary[metric]
-    ax.bar(LABELS, vals, color=bar_colors)
+    ax.bar(LABELS, vals, color=[seg_colors[s] for s in LABELS])
     ax.set_title(f"Mean {metric} per Segment")
     ax.set_ylabel(metric)
     ax.tick_params(axis="x", rotation=15)
@@ -242,41 +241,20 @@ for ax, metric in zip(axes, metrics):
 
 plt.suptitle("Mean RFM Values by Segment", y=1.02)
 plt.tight_layout()
-fig.savefig(f"{OUTPUT_DIR}/01_rfm_means_bar.png", dpi=150, bbox_inches="tight")
+fig.savefig(p("01_rfm_means_bar.png"), dpi=150, bbox_inches="tight")
 plt.close(fig)
-print(f"Saved -> {OUTPUT_DIR}/01_rfm_means_bar.png")
+print(f"Saved -> outputs/Clustering/01_rfm_means_bar.png")
 
-# -- 13. Cluster centroids in original (un-logged) units ---------------------
-# Inverse-transform the scaled centroids back through MinMax then expm1
-centroids_scaled = km_final.cluster_centers_          # shape (k, 3) in [0,1]
-centroids_log    = scaler.inverse_transform(centroids_scaled)   # log1p space
-centroids_raw    = np.expm1(centroids_log)             # original units
-
-centroid_df = pd.DataFrame(centroids_raw, columns=["Recency", "Frequency", "Monetary"])
+# -- 13. Centroid table -------------------------------------------------------
+centroids_raw = np.expm1(scaler.inverse_transform(km_final.cluster_centers_))
+centroid_df   = pd.DataFrame(centroids_raw,
+                              columns=["Recency", "Frequency", "Monetary"])
 centroid_df.index = [label_map[i] for i in range(K_FINAL)]
-centroid_df = centroid_df.loc[LABELS].round(1)
+centroid_df       = centroid_df.loc[LABELS].round(1)
+
 print("\nCluster centroids (original units):")
 print(centroid_df.to_string())
 
-# -- 14. Sanity check: Frequency vs Monetary scatter --------------------------
-# If clusters are genuinely 3D, High Performance should dominate
-# the top-right corner (high F, high M) in this view too.
-fig, ax = plt.subplots(figsize=(10, 6))
-for seg in LABELS:
-    grp = rfm[rfm["Segment"] == seg]
-    ax.scatter(grp["Frequency"], np.log1p(grp["Monetary"]),
-               label=seg, alpha=0.5, s=15, color=seg_colors[seg])
-
-ax.set_xlabel("Frequency (number of invoices)")
-ax.set_ylabel("log(1 + Monetary)")
-ax.set_title("Sanity Check - Frequency vs log-Monetary by Segment")
-ax.legend(markerscale=2, fontsize=9)
-plt.tight_layout()
-fig.savefig(f"{OUTPUT_DIR}/01_scatter_freq_monetary.png", dpi=150)
-plt.close(fig)
-print(f"Saved -> {OUTPUT_DIR}/01_scatter_freq_monetary.png")
-
-# -- 15. Centroid table figure (report-ready) ---------------------------------
 fig, ax = plt.subplots(figsize=(9, 2))
 ax.axis("off")
 
@@ -289,23 +267,17 @@ table_data = [
 ]
 col_labels = ["Segment", "Recency", "Frequency (invoices)", "Monetary (£)"]
 
-tbl = ax.table(
-    cellText=table_data,
-    colLabels=col_labels,
-    colWidths=[0.35, 0.20, 0.25, 0.20],
-    cellLoc="center",
-    loc="center",
-)
+tbl = ax.table(cellText=table_data, colLabels=col_labels,
+               colWidths=[0.35, 0.20, 0.25, 0.20],
+               cellLoc="center", loc="center")
 tbl.auto_set_font_size(False)
 tbl.set_fontsize(11)
 tbl.scale(1, 2)
 
-# Style header row
 for j in range(len(col_labels)):
     tbl[0, j].set_facecolor("#2c2c2c")
     tbl[0, j].set_text_props(color="white", fontweight="bold")
 
-# Style segment name cells with segment colour
 for i, seg in enumerate(LABELS):
     tbl[i + 1, 0].set_facecolor(seg_colors[seg])
     tbl[i + 1, 0].set_text_props(color="white", fontweight="bold")
@@ -315,22 +287,34 @@ for i, seg in enumerate(LABELS):
 ax.set_title("Cluster Centroids (original units)", fontsize=12,
              fontweight="bold", pad=12)
 plt.tight_layout()
-fig.savefig(f"{OUTPUT_DIR}/01_centroid_table.png", dpi=150, bbox_inches="tight")
+fig.savefig(p("01_centroid_table.png"), dpi=150, bbox_inches="tight")
 plt.close(fig)
-print(f"Saved -> {OUTPUT_DIR}/01_centroid_table.png")
+print(f"Saved -> outputs/Clustering/01_centroid_table.png")
 
-# -- 16. 3D scatter: Recency / Frequency / log-Monetary ----------------------
+# -- 14. Sanity check: Frequency vs Monetary ----------------------------------
+fig, ax = plt.subplots(figsize=(10, 6))
+for seg in LABELS:
+    grp = rfm[rfm["Segment"] == seg]
+    ax.scatter(grp["Frequency"], np.log1p(grp["Monetary"]),
+               label=seg, alpha=0.5, s=15, color=seg_colors[seg])
+
+ax.set_xlabel("Frequency (number of invoices)")
+ax.set_ylabel("log(1 + Monetary)")
+ax.set_title("Sanity Check - Frequency vs log-Monetary by Segment")
+ax.legend(markerscale=2, fontsize=9)
+plt.tight_layout()
+fig.savefig(p("01_scatter_freq_monetary.png"), dpi=150)
+plt.close(fig)
+print(f"Saved -> outputs/Clustering/01_scatter_freq_monetary.png")
+
+# -- 15. 3D scatter -----------------------------------------------------------
 fig = plt.figure(figsize=(11, 8))
 ax3d = fig.add_subplot(111, projection="3d")
 
 for seg in LABELS:
     grp = rfm[rfm["Segment"] == seg]
-    ax3d.scatter(
-        grp["Recency"],
-        grp["Frequency"],
-        np.log1p(grp["Monetary"]),
-        label=seg, alpha=0.4, s=10, color=seg_colors[seg],
-    )
+    ax3d.scatter(grp["Recency"], grp["Frequency"], np.log1p(grp["Monetary"]),
+                 label=seg, alpha=0.4, s=10, color=seg_colors[seg])
 
 ax3d.set_xlabel("Recency (days)", labelpad=8)
 ax3d.set_ylabel("Frequency (invoices)", labelpad=8)
@@ -338,13 +322,13 @@ ax3d.set_zlabel("log(1 + Monetary)", labelpad=8)
 ax3d.set_title("RFM Clusters - 3D View")
 ax3d.legend(markerscale=2, fontsize=9)
 plt.tight_layout()
-fig.savefig(f"{OUTPUT_DIR}/01_scatter_3d.png", dpi=150)
+fig.savefig(p("01_scatter_3d.png"), dpi=150)
 plt.close(fig)
-print(f"Saved -> {OUTPUT_DIR}/01_scatter_3d.png")
+print(f"Saved -> outputs/Clustering/01_scatter_3d.png")
 
 # -- 16. Save labelled table --------------------------------------------------
 out_cols = ["CustomerID", "Recency", "Frequency", "Monetary", "Cluster", "Segment"]
-rfm[out_cols].to_csv(f"{OUTPUT_DIR}/rfm_segments.csv", index=False)
-print(f"Saved -> {OUTPUT_DIR}/rfm_segments.csv")
+rfm[out_cols].to_csv(p("rfm_segments.csv"), index=False)
+print(f"Saved -> outputs/Clustering/rfm_segments.csv")
 
 print("\nDone.")
