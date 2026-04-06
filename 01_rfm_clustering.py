@@ -20,7 +20,7 @@ from sklearn.metrics import silhouette_score, silhouette_samples
 
 # -- Config -------------------------------------------------------------------
 DATA_PATH  = "data/online_retail_cleaned.parquet"
-OUTPUT_DIR = "outputs"
+OUTPUT_DIR = "outputs/Clustering"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 K_RANGE     = range(2, 10)
@@ -246,7 +246,103 @@ fig.savefig(f"{OUTPUT_DIR}/01_rfm_means_bar.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
 print(f"Saved -> {OUTPUT_DIR}/01_rfm_means_bar.png")
 
-# -- 13. Save labelled table --------------------------------------------------
+# -- 13. Cluster centroids in original (un-logged) units ---------------------
+# Inverse-transform the scaled centroids back through MinMax then expm1
+centroids_scaled = km_final.cluster_centers_          # shape (k, 3) in [0,1]
+centroids_log    = scaler.inverse_transform(centroids_scaled)   # log1p space
+centroids_raw    = np.expm1(centroids_log)             # original units
+
+centroid_df = pd.DataFrame(centroids_raw, columns=["Recency", "Frequency", "Monetary"])
+centroid_df.index = [label_map[i] for i in range(K_FINAL)]
+centroid_df = centroid_df.loc[LABELS].round(1)
+print("\nCluster centroids (original units):")
+print(centroid_df.to_string())
+
+# -- 14. Sanity check: Frequency vs Monetary scatter --------------------------
+# If clusters are genuinely 3D, High Performance should dominate
+# the top-right corner (high F, high M) in this view too.
+fig, ax = plt.subplots(figsize=(10, 6))
+for seg in LABELS:
+    grp = rfm[rfm["Segment"] == seg]
+    ax.scatter(grp["Frequency"], np.log1p(grp["Monetary"]),
+               label=seg, alpha=0.5, s=15, color=seg_colors[seg])
+
+ax.set_xlabel("Frequency (number of invoices)")
+ax.set_ylabel("log(1 + Monetary)")
+ax.set_title("Sanity Check - Frequency vs log-Monetary by Segment")
+ax.legend(markerscale=2, fontsize=9)
+plt.tight_layout()
+fig.savefig(f"{OUTPUT_DIR}/01_scatter_freq_monetary.png", dpi=150)
+plt.close(fig)
+print(f"Saved -> {OUTPUT_DIR}/01_scatter_freq_monetary.png")
+
+# -- 15. Centroid table figure (report-ready) ---------------------------------
+fig, ax = plt.subplots(figsize=(9, 2))
+ax.axis("off")
+
+table_data = [
+    [seg,
+     f"{int(round(centroid_df.loc[seg, 'Recency']))} days",
+     f"{centroid_df.loc[seg, 'Frequency']:.1f}",
+     f"£{centroid_df.loc[seg, 'Monetary']:,.0f}"]
+    for seg in LABELS
+]
+col_labels = ["Segment", "Recency", "Frequency (invoices)", "Monetary (£)"]
+
+tbl = ax.table(
+    cellText=table_data,
+    colLabels=col_labels,
+    colWidths=[0.35, 0.20, 0.25, 0.20],
+    cellLoc="center",
+    loc="center",
+)
+tbl.auto_set_font_size(False)
+tbl.set_fontsize(11)
+tbl.scale(1, 2)
+
+# Style header row
+for j in range(len(col_labels)):
+    tbl[0, j].set_facecolor("#2c2c2c")
+    tbl[0, j].set_text_props(color="white", fontweight="bold")
+
+# Style segment name cells with segment colour
+for i, seg in enumerate(LABELS):
+    tbl[i + 1, 0].set_facecolor(seg_colors[seg])
+    tbl[i + 1, 0].set_text_props(color="white", fontweight="bold")
+    for j in range(1, len(col_labels)):
+        tbl[i + 1, j].set_facecolor("#f9f9f9")
+
+ax.set_title("Cluster Centroids (original units)", fontsize=12,
+             fontweight="bold", pad=12)
+plt.tight_layout()
+fig.savefig(f"{OUTPUT_DIR}/01_centroid_table.png", dpi=150, bbox_inches="tight")
+plt.close(fig)
+print(f"Saved -> {OUTPUT_DIR}/01_centroid_table.png")
+
+# -- 16. 3D scatter: Recency / Frequency / log-Monetary ----------------------
+fig = plt.figure(figsize=(11, 8))
+ax3d = fig.add_subplot(111, projection="3d")
+
+for seg in LABELS:
+    grp = rfm[rfm["Segment"] == seg]
+    ax3d.scatter(
+        grp["Recency"],
+        grp["Frequency"],
+        np.log1p(grp["Monetary"]),
+        label=seg, alpha=0.4, s=10, color=seg_colors[seg],
+    )
+
+ax3d.set_xlabel("Recency (days)", labelpad=8)
+ax3d.set_ylabel("Frequency (invoices)", labelpad=8)
+ax3d.set_zlabel("log(1 + Monetary)", labelpad=8)
+ax3d.set_title("RFM Clusters - 3D View")
+ax3d.legend(markerscale=2, fontsize=9)
+plt.tight_layout()
+fig.savefig(f"{OUTPUT_DIR}/01_scatter_3d.png", dpi=150)
+plt.close(fig)
+print(f"Saved -> {OUTPUT_DIR}/01_scatter_3d.png")
+
+# -- 16. Save labelled table --------------------------------------------------
 out_cols = ["CustomerID", "Recency", "Frequency", "Monetary", "Cluster", "Segment"]
 rfm[out_cols].to_csv(f"{OUTPUT_DIR}/rfm_segments.csv", index=False)
 print(f"Saved -> {OUTPUT_DIR}/rfm_segments.csv")
