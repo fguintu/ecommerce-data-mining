@@ -1,0 +1,9 @@
+,Anomaly,Normal,Ratio
+TotalQuantity,3276.56,225.71,14.52
+TotalRevenue,4487.75,384.12,11.68
+NumLineItems,51.62,20.59,2.51
+NumDistinct,50.87,20.32,2.5
+AvgUnitPrice,17.14,3.21,5.34
+MaxUnitPrice,34.87,9.3,3.75
+AvgQuantityPerLine,624.34,21.65,28.84
+RevenuePerLine,944.64,37.59,25.13
