@@ -1,0 +1,5 @@
+Quarter,Invoices,Frequent Itemsets,Rules,Avg Lift
+Q1 (Jan–Mar),6852,399,105,11.711
+Q2 (Apr–Jun),8236,410,165,18.75
+Q3 (Jul–Sep),8624,453,177,11.663
+Q4 (Oct–Dec),12895,443,140,12.87
